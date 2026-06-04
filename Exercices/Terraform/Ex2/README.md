@@ -10,6 +10,25 @@ A la fin de cet exercice, vous devez comprendre:
 - comment activer des controles securite essentiels pour SQL Server;
 - comment transmettre les sorties utiles sans exposer les secrets.
 
+## Specificites Ex2 (extension complete de Ex1)
+
+Ex2 reprend la structure modulaire de Ex1 et ajoute:
+1. Une VM Ubuntu minimale (`Standard_B1ls`) dans le subnet `private-endpoints-subnet`.
+2. Une identite managée system-assigned sur cette VM.
+3. L'utilisation de cette identite managée comme administrateur Entra ID du serveur SQL.
+4. L'installation automatique d'outils de connexion SQL sur la VM (`azure-cli`, `msodbcsql18`, `mssql-tools18`).
+5. Un espace Log Analytics prive avec Private Link (AMPLS) et des diagnostics centralises.
+
+Modules ajoutes dans Ex2:
+- `modules/vm`: provisionne la VM Ubuntu, sa NIC privee et son identite managée.
+- `modules/observability`: provisionne un Log Analytics prive, les DNS prives Azure Monitor, un private endpoint AMPLS, et les `diagnostic settings` des ressources principales.
+
+Flux d'identite admin SQL dans Ex2:
+1. La VM est creee avec une identite managée system-assigned.
+2. Le `principal_id` de cette identite est exporte par le module VM.
+3. Le module MSSQL consomme ce `principal_id` dans `azuread_administrator`.
+4. La VM peut se connecter a SQL en Entra ID avec ses droits admin.
+
 ## A quoi servent les outputs Terraform
 
 Dans Terraform, les blocs `output` (souvent places dans `outputs.tf`) servent a exposer des valeurs utiles apres `terraform apply`.
@@ -44,10 +63,14 @@ Voir aussi [structure.txt](structure.txt).
 1. Un VNet dedie.
 2. Un subnet applicatif (workloads).
 3. Un subnet dedie aux private endpoints.
-4. Un Azure SQL logical server.
-5. Une base de donnees SQL.
-6. Un Private Endpoint vers le SQL server.
-7. Une zone DNS privee liee au VNet pour la resolution du FQDN SQL.
+4. Une VM Ubuntu minimale dans le subnet `private-endpoints-subnet`.
+5. Une identite managée system-assigned sur la VM.
+6. Un Azure SQL logical server.
+7. Une base de donnees SQL.
+8. Un Private Endpoint vers le SQL server.
+9. Une zone DNS privee liee au VNet pour la resolution du FQDN SQL.
+10. Un Log Analytics Workspace prive + AMPLS + private endpoint de monitoring.
+11. Des diagnostics actives vers Log Analytics (SQL Server, SQL DB, VM, NSG, private endpoint SQL).
 
 ## Schema de l'environnement
 
