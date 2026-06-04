@@ -1,0 +1,15 @@
+SECURITY-MSSQL-TERRAFORM/
+|-- main.tf                 # Root orchestration: calls modules
+|-- variables.tf            # Global variables and conventions
+|-- outputs.tf              # Root outputs for students/operators
+|-- terraform.tfvars        # Environment values
+|-- README.md               # Student guide and security rationale
+|-- modules/
+|   |-- network/
+|   |   |-- main.tf         # VNet + subnets + NSG
+|   |   |-- variables.tf
+|   |   |-- outputs.tf
+|   |-- mssql/
+|       |-- main.tf         # SQL Server + DB + private endpoint + private DNS
+|       |-- variables.tf
+|       |-- outputs.tf
