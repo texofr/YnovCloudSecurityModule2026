@@ -1,324 +1,229 @@
-# Exercice Security - Azure SQL (MsSQL) securise avec Terraform
+# Exercice Security Ex2 - Azure SQL prive, VM d'administration, observabilite privee et Azure Bastion
 
-Ce dossier présente une logique modulaire Terraform, avec l'objectif de provisionner une base Azure SQL de façon securisee et pedagogique.
+Ce dossier Ex2 deploie une architecture securisee sur Azure avec Terraform:
+- Azure SQL accessible uniquement en prive (Private Endpoint + DNS prive).
+- VM Ubuntu interne pour administration/tests SQL.
+- Identite managee de la VM utilisee comme administrateur Entra ID de SQL.
+- Log Analytics prive via AMPLS + diagnostics centralises.
+- Azure Bastion pour acceder a la VM sans exposer de port SSH public.
 
 ## Objectif pedagogique
 
 A la fin de cet exercice, vous devez comprendre:
-- comment decouper une infra Terraform en modules reutilisables;
-- comment exposer une base de donnees uniquement en prive (pas d'acces Internet public);
-- comment activer des controles securite essentiels pour SQL Server;
-- comment transmettre les sorties utiles sans exposer les secrets.
+- la modularisation Terraform (network, vm, mssql, observability);
+- le pattern Private Endpoint + DNS prive pour SQL;
+- l'authentification Entra ID pour SQL via managed identity;
+- le monitoring prive avec Log Analytics et AMPLS;
+- l'administration d'une VM privee via Azure Bastion.
 
-## Specificites Ex2 (extension complete de Ex1)
+## Modules Ex2
 
-Ex2 reprend la structure modulaire de Ex1 et ajoute:
-1. Une VM Ubuntu minimale (`Standard_B1ls`) dans le subnet `private-endpoints-subnet`.
-2. Une identite managée system-assigned sur cette VM.
-3. L'utilisation de cette identite managée comme administrateur Entra ID du serveur SQL.
-4. L'installation automatique d'outils de connexion SQL sur la VM (`azure-cli`, `msodbcsql18`, `mssql-tools18`).
-5. Un espace Log Analytics prive avec Private Link (AMPLS) et des diagnostics centralises.
+- `modules/network`
+  - VNet et 3 subnets:
+    - `db-workload-subnet`
+    - `private-endpoints-subnet`
+    - `AzureBastionSubnet`
+  - NSG pedagogique sur `db-workload-subnet`.
+  - Azure Bastion Host + Public IP Standard.
 
-Modules ajoutes dans Ex2:
-- `modules/vm`: provisionne la VM Ubuntu, sa NIC privee et son identite managée.
-- `modules/observability`: provisionne un Log Analytics prive, les DNS prives Azure Monitor, un private endpoint AMPLS, et les `diagnostic settings` des ressources principales.
+- `modules/vm`
+  - VM Linux Ubuntu.
+  - NIC privee uniquement (pas d'IP publique).
+  - Identite managee SystemAssigned.
+  - Mot de passe admin local genere automatiquement.
+  - Bootstrap cloud-init: Azure CLI + pilotes/outils SQL (`msodbcsql18`, `mssql-tools18`).
 
-Flux d'identite admin SQL dans Ex2:
-1. La VM est creee avec une identite managée system-assigned.
-2. Le `principal_id` de cette identite est exporte par le module VM.
-3. Le module MSSQL consomme ce `principal_id` dans `azuread_administrator`.
-4. La VM peut se connecter a SQL en Entra ID avec ses droits admin.
+- `modules/mssql`
+  - Azure SQL Server + base SQL.
+  - `public_network_access_enabled = false`.
+  - `minimum_tls_version = "1.2"`.
+  - TDE active sur la base.
+  - Admin Entra ID active en mode `azuread_authentication_only = true`.
+  - Private Endpoint SQL + zone DNS `privatelink.database.windows.net`.
 
-## A quoi servent les outputs Terraform
-
-Dans Terraform, les blocs `output` (souvent places dans `outputs.tf`) servent a exposer des valeurs utiles apres `terraform apply`.
-Ils ne creent pas de ressources: ils publient des resultats de l'infrastructure.
-
-Usages principaux:
-1. Afficher des informations utiles en fin de deploiement (ID, IP, noms, FQDN).
-2. Partager des valeurs entre modules Terraform.
-3. Alimenter des scripts/outils via `terraform output` (CI/CD, automatisation).
-4. Definir le contrat d'interface d'un module (ce qu'il fournit au module parent).
-
-Dans cet exercice, les outputs servent bien a partager des valeurs entre modules:
-- Le module `network` expose `vnet_id` et `private_endpoint_subnet_id`.
-- Le module racine lit `module.mon_reseau.vnet_id` et `module.mon_reseau.private_endpoint_subnet_id`.
-- Ces valeurs sont passees en entree du module `mssql` via `vnet_id` et `target_subnet_id`.
-
-Note: `db_subnet_id` est expose par le module `network`, mais n'est pas encore consomme par un autre module dans cette version.
-
-## Arborescence
-
-Voir aussi [structure.txt](structure.txt).
-
-- [main.tf](main.tf): orchestration racine
-- [variables.tf](variables.tf): variables globales
-- [terraform.tfvars](terraform.tfvars): valeurs d'environnement
-- [outputs.tf](outputs.tf): sorties finales
-- [modules/network/main.tf](modules/network/main.tf): VNet, subnets, NSG
-- [modules/mssql/main.tf](modules/mssql/main.tf): SQL, DB, Private Endpoint, Private DNS
+- `modules/observability`
+  - Log Analytics Workspace prive (`internet_ingestion_enabled = false`, `internet_query_enabled = false`).
+  - Azure Monitor Private Link Scope (AMPLS).
+  - Private Endpoint AMPLS + zones DNS privees monitor/oms/ods/agentsvc.
+  - Diagnostic settings sur SQL Server, SQL DB, VM, NSG.
 
 ## Architecture cible
 
-1. Un VNet dedie.
-2. Un subnet applicatif (workloads).
-3. Un subnet dedie aux private endpoints.
-4. Une VM Ubuntu minimale dans le subnet `private-endpoints-subnet`.
-5. Une identite managée system-assigned sur la VM.
-6. Un Azure SQL logical server.
-7. Une base de donnees SQL.
-8. Un Private Endpoint vers le SQL server.
-9. Une zone DNS privee liee au VNet pour la resolution du FQDN SQL.
-10. Un Log Analytics Workspace prive + AMPLS + private endpoint de monitoring.
-11. Des diagnostics actives vers Log Analytics (SQL Server, SQL DB, VM, NSG, private endpoint SQL).
-
-## Schema de l'environnement
-
 ```mermaid
 flowchart TB
-	RG[Resource Group]
+  RG[Resource Group]
 
-	subgraph VNET[VNet]
-		direction TB
-		DBS[Subnet db-workload-subnet]
-		PES[Subnet private-endpoints-subnet]
-		NSG[NSG db_nsg]
-	end
+  subgraph VNET[VNet]
+    direction TB
+    DBS[db-workload-subnet]
+    PES[private-endpoints-subnet]
+    BAS[AzureBastionSubnet]
+  end
 
-	APP[Workloads applicatifs]
-	SQLS[Azure SQL Server]
-	SQLDB[Azure SQL Database]
-	PE[Private Endpoint SQL]
-	DNS[Private DNS Zone\nprivatelink.database.windows.net]
-	CLIENT[Client dans le VNet]
+  NSG[NSG sur db-workload-subnet]
+  VM[VM Ubuntu privee]
+  SQLS[Azure SQL Server]
+  SQLDB[Azure SQL Database]
+  PE_SQL[Private Endpoint SQL]
+  DNS_SQL[Private DNS: privatelink.database.windows.net]
 
-	RG --> VNET
-	RG --> SQLS
-	RG --> DNS
+  BASTION[Azure Bastion Host]
+  BASTION_PIP[Public IP Bastion]
+  ADMIN[Poste admin via portail Azure]
 
-	NSG --> DBS
-	APP --> DBS
-	DBS --> PE
-	PES --> PE
-	PE --> SQLS
-	SQLS --> SQLDB
+  LAW[Log Analytics prive]
+  AMPLS[Azure Monitor Private Link Scope]
+  PE_AMPLS[Private Endpoint AMPLS]
+  DNS_MON[Private DNS monitor/oms/ods/agentsvc]
 
-	VNET --> DNS
-	CLIENT --> DNS
-	DNS --> PE
-	CLIENT --> PE
+  RG --> VNET
+  RG --> SQLS
+  RG --> LAW
+  RG --> AMPLS
+  RG --> BASTION
 
-	INTERNET[(Internet)] -. acces public bloque .-> SQLS
+  DBS --> NSG
+  PES --> VM
+  PES --> PE_SQL
+  PES --> PE_AMPLS
+
+  SQLS --> SQLDB
+  PE_SQL --> SQLS
+  DNS_SQL --> PE_SQL
+  VNET --> DNS_SQL
+
+  AMPLS --> LAW
+  PE_AMPLS --> AMPLS
+  VNET --> DNS_MON
+
+  BASTION --> VM
+  BASTION_PIP --> BASTION
+  ADMIN --> BASTION_PIP
+
+  INTERNET[(Internet)] -. acces SQL public desactive .-> SQLS
+  INTERNET -. pas de SSH public VM .-> VM
 ```
 
-Lecture rapide du schema:
-1. Le trafic applicatif reste dans le VNet.
-2. Le SQL Server n'est pas expose publiquement (`public_network_access_enabled = false`).
-3. La resolution DNS privee redirige le FQDN SQL vers l'IP privee du Private Endpoint.
-4. Le NSG est associe au subnet des workloads pour rendre les intentions de filtrage explicites.
+## Sequence d'identite admin SQL
 
-## Best practices securite appliquees
+1. La VM est creee avec une identite managee system-assigned.
+2. Le `principal_id` de cette identite est expose par le module VM.
+3. Le module SQL reutilise ce `principal_id` dans `azuread_administrator`.
+4. La VM peut ensuite s'authentifier a SQL via Entra ID selon les droits associes.
 
-1. Pas d'exposition publique de la base
-- Dans [modules/mssql/main.tf](modules/mssql/main.tf), `public_network_access_enabled = false`.
-- Effet: impossible de se connecter a la base depuis Internet.
+## Sorties Terraform importantes
 
-2. Acces prive uniquement
-- Private Endpoint configure dans [modules/mssql/main.tf](modules/mssql/main.tf).
-- Zone DNS privee `privatelink.database.windows.net` + lien VNet.
-- Effet: les clients dans le VNet resolvent le serveur SQL vers une IP privee.
+Apres `terraform apply`, utilisez `terraform output` pour recuperer:
+- `sql_server_fqdn`
+- `sql_server_name`
+- `sql_database_name`
+- `private_endpoint_ip`
+- `vm_private_ip`
+- `vm_identity_principal_id`
+- `log_analytics_workspace_id`
+- `log_analytics_workspace_name`
+- `generated_sql_admin_password` (sensible, renseigne si `sql_admin_password = null`)
+- `vm_admin_password` (sensible, mot de passe local de la VM)
+- `bastion_public_ip`
+- `bastion_host_id`
 
-3. Chiffrement en transit
-- `minimum_tls_version = "1.2"` dans [modules/mssql/main.tf](modules/mssql/main.tf).
-- Effet: bloque les clients trop anciens/non securises.
+## Utilisation d'Azure Bastion (important)
 
-4. Chiffrement au repos
-- `transparent_data_encryption_enabled = true` sur la base dans [modules/mssql/main.tf](modules/mssql/main.tf).
-- Effet: les donnees stockees sont chiffrees automatiquement.
+Le design Ex2 impose une VM sans IP publique. L'acces d'administration se fait via Azure Bastion.
 
-5. Authentification centralisee Entra ID
-- Bloc `azuread_administrator` avec `azuread_authentication_only = true` dans [modules/mssql/main.tf](modules/mssql/main.tf).
-- Effet: reduction de la dependance aux comptes SQL locaux.
+Prerequis:
+- Avoir deploye Ex2 avec succes.
+- Recuperer le login local VM (`vm_admin_username` dans `terraform.tfvars`, par defaut `azureuser`).
+- Recuperer le mot de passe VM:
 
-6. Secret admin fort
-- Si `sql_admin_password` est null, Terraform genere un mot de passe fort via `random_password`.
-- Le mot de passe reste sensible dans les outputs.
-- Effet: evite les mots de passe faibles en dur dans les fichiers.
-
-### Focus sur la ligne 8 de modules/mssql/main.tf
-
-La ligne suivante definit le mot de passe admin SQL effectivement utilise:
-
-`effective_sql_admin_password = coalesce(var.sql_admin_password, random_password.generated_sql_admin_password.result)`
-
-Explication:
-1. `coalesce(...)` retourne la premiere valeur non nulle.
-2. Si `var.sql_admin_password` est renseigne, Terraform utilise cette valeur.
-3. Sinon, Terraform utilise le mot de passe genere par `random_password.generated_sql_admin_password.result`.
-
-Cette logique permet de couvrir les deux cas: mot de passe fourni manuellement ou generation automatique securisee.
-
-7. Segmentation reseau
-- Subnet dedie pour Private Endpoint dans [modules/network/main.tf](modules/network/main.tf).
-- NSG explicite pour pedagogie (deny inbound Internet visible).
-- Effet: architecture plus lisible et mieux cloisonnee.
-
-## Comment reutiliser ce code
-
-1. Renseigner votre contexte
-- Mettre le bon `rg_name` dans [terraform.tfvars](terraform.tfvars).
-- Mettre un `sql_server_name` unique globalement.
-- Remplacer `aad_admin_object_id` et `aad_admin_login_username`.
-
-2. Initialiser
 ```bash
-terraform init
+terraform output -raw vm_admin_password
 ```
 
-3. Verifier
-```bash
-terraform fmt -recursive
-terraform validate
-terraform plan
-```
+Connexion via portail Azure:
+1. Ouvrir la ressource VM creee par Ex2.
+2. Cliquer sur Connect puis Bastion.
+3. Methode d'authentification: mot de passe.
+4. Username: valeur de `vm_admin_username`.
+5. Password: valeur de `terraform output -raw vm_admin_password`.
+6. Ouvrir la session et executer les tests reseau/SQL depuis la VM.
 
-4. Deployer
-```bash
-terraform apply
-```
+Ce que Bastion apporte dans ce lab:
+- aucun port SSH public sur la VM;
+- acces admin centralise via un service manage Azure;
+- surface d'attaque reduite par rapport a une VM exposee en Internet.
 
-## Prochaines etapes detaillees (guide pas-a-pas)
+## Deploiement pas-a-pas
 
-1. Verifier les pre-requis locaux
-- Terraform installe (`terraform -version`).
-- Azure CLI installe (`az version`).
-- Session Azure ouverte (`az login`).
-
-### Connexion Azure CLI en mode interactif (obligatoire avant Terraform)
-
-Si vous n'etes pas encore connecte a Azure, utilisez la connexion interactive:
-
+1. Se connecter a Azure:
 ```bash
 az login
-```
-
-Selon votre poste, Azure CLI ouvre votre navigateur pour vous authentifier.
-Une fois connecte, verifiez le compte actif:
-
-```bash
 az account show --output table
 ```
 
-Si vous avez plusieurs abonnements, choisissez celui du lab:
-
-```bash
-az account list --output table
-az account set --subscription "<SUBSCRIPTION_ID_OU_NOM>"
-az account show --output table
-```
-
-Quand cette etape est validee, Terraform utilisera automatiquement cette session Azure CLI.
-
-2. Cibler le bon abonnement Azure
+2. Selectionner l'abonnement:
 ```bash
 az account list --output table
 az account set --subscription "<SUBSCRIPTION_ID_OU_NOM>"
 ```
 
-3. Completer les variables obligatoires dans [terraform.tfvars](terraform.tfvars)
+3. Verifier et adapter `terraform.tfvars`:
 - `rg_name`: Resource Group existant.
-- `sql_server_name`: nom unique global Azure.
-- `aad_admin_object_id`: Object ID Entra ID (groupe recommande).
-- `aad_admin_login_username`: nom du groupe/user Entra ID admin SQL.
+- `sql_server_name`: unique globalement dans Azure.
+- `vm_name`, `vm_size`, `vm_admin_username`.
+- `vnet_params` (incluant `bastion_subnet_cidr`).
 
-### Cas Entra ID utilisateur vs groupe
-
-Pour cet exercice, utilisez un utilisateur Entra ID (pas un groupe).
-
-Cas 1 - Utilisateur Entra ID (cas a utiliser dans ce lab):
-1. Recuperer l'Object ID de l'utilisateur:
-```bash
-az ad user show --id "prenom.nom@domaine.com" --query id -o tsv
-```
-2. Renseigner dans [terraform.tfvars](terraform.tfvars):
-- `aad_admin_object_id`: l'ID retourne par la commande ci-dessus.
-- `aad_admin_login_username`: l'identifiant de connexion utilisateur (UPN), par exemple `prenom.nom@domaine.com`.
-
-Cas 2 - Groupe Entra ID (information, non utilise dans ce lab):
-1. Recuperer l'Object ID du groupe:
-```bash
-az ad group show --group "sql-admins-ynov" --query id -o tsv
-```
-2. Renseigner dans [terraform.tfvars](terraform.tfvars):
-- `aad_admin_object_id`: l'ID du groupe.
-- `aad_admin_login_username`: le nom du groupe, par exemple `sql-admins-ynov`.
-
-Verification recommandee avant apply:
-```bash
-az account show --query tenantId -o tsv
-```
-Le principal Entra ID (utilisateur ou groupe) doit appartenir au meme tenant que l'abonnement Azure utilise.
-
-4. Initialiser et valider la configuration
+4. Initialiser et valider:
 ```bash
 terraform init
 terraform fmt -recursive
 terraform validate
 ```
 
-5. Lire le plan avant deployment
+5. Planifier:
 ```bash
 terraform plan -out tfplan
 ```
-Controlez surtout:
-- la creation du Private Endpoint;
-- `public_network_access_enabled = false`;
-- la presence de l'admin Entra ID;
-- les ressources DNS privees.
 
-6. Deployer l'infrastructure
+6. Appliquer:
 ```bash
 terraform apply tfplan
 ```
 
-7. Verifier les sorties utiles
+7. Verifier les outputs:
 ```bash
 terraform output
 ```
-Elements attendus:
-- `sql_server_fqdn`
-- `sql_database_name`
-- `private_endpoint_ip`
 
-8. Tester la connectivite privee (depuis une VM dans le VNet)
-- Resolution DNS du FQDN SQL vers une IP privee.
-- Connexion SQL uniquement depuis le reseau autorise.
+8. Ouvrir une session sur la VM via Bastion (et non SSH public).
 
-9. Nettoyer l'environnement de lab (quand termine)
+9. Nettoyer le lab si besoin:
 ```bash
 terraform destroy
 ```
 
-10. Aller plus loin
-- Ajouter l'auditing SQL.
-- Activer Defender for SQL.
-- Integrer Key Vault pour la gestion des secrets.
+## Verifications de securite a faire apres deploiement
 
-## Points de vigilance
+- SQL public desactive:
+  - verifier `public_network_access_enabled = false` sur SQL Server.
+- Resolution DNS privee SQL:
+  - le FQDN SQL doit resoudre vers une IP privee du Private Endpoint depuis le VNet.
+- VM non exposee publiquement:
+  - aucune IP publique attachee a la NIC VM.
+- Bastion present et fonctionnel:
+  - la connexion VM se fait via Bastion depuis le portail Azure.
+- Observabilite privee:
+  - le workspace Log Analytics n'accepte pas ingestion/query Internet.
 
-1. Le nom du SQL server doit etre unique a l'echelle Azure.
-2. Si votre poste n'est pas relie au VNet, vous ne pourrez pas vous connecter a la base (normal, car acces prive).
-3. Les valeurs sensibles ne doivent pas etre committees dans Git.
+## Notes importantes
 
-## Pistes d'amelioration (niveau avance)
+- Le nom SQL Server doit etre unique globalement.
+- Les outputs sensibles ne doivent pas etre commits dans Git.
+- Les Private Endpoints ne supportent pas les diagnostics Azure Monitor: c'est normal de ne pas avoir de diagnostic setting sur le PE SQL.
 
-1. Ajouter Microsoft Defender for SQL.
-2. Ajouter Auditing SQL vers Log Analytics/Storage.
-3. Remplacer la gestion locale des secrets par Azure Key Vault + pipeline CI/CD.
-4. Ajouter des policies Azure pour imposer TLS, private endpoints et tags.
+## Pistes d'amelioration
 
-## Mapping rapide Ex2 -> Security
-
-- Module `compute` (Ex2) devient module `mssql`.
-- Module `network` reste present, mais adapte au pattern private endpoint.
-- Les outputs finaux affichent des infos SQL (FQDN prive, IP privee) plutot qu'une IP publique de VM.
+- Ajouter Microsoft Defender for SQL.
+- Ajouter auditing SQL vers Storage/Log Analytics selon vos objectifs.
+- Integrer Azure Key Vault pour la gestion des secrets.
+- Renforcer les controles NSG/UDR selon le contexte de production.
