@@ -153,6 +153,16 @@ Ce que Bastion apporte dans ce lab:
 - acces admin centralise via un service manage Azure;
 - surface d'attaque reduite par rapport a une VM exposee en Internet.
 
+Depannage MSI (erreur courante):
+- Si vous voyez `No access was configured for the managed identity, hence no subscriptions were found`, c'est un cas possible quand l'identite n'a pas de role RBAC abonnement.
+- Utilisez la connexion suivante dans la VM:
+
+```bash
+az login --identity --allow-no-subscriptions
+```
+
+- Le script `/usr/local/bin/sql-mi-connect-example.sh` est prevu avec cette option.
+
 ## Deploiement pas-a-pas
 
 1. Se connecter a Azure:
@@ -197,9 +207,56 @@ terraform output
 
 8. Ouvrir une session sur la VM via Bastion (et non SSH public).
 
-9. Nettoyer le lab si besoin:
+9. Tester la connectivite SQL depuis la VM (voir section ci-dessous).
+
+10. Nettoyer le lab si besoin:
 ```bash
 terraform destroy
+```
+
+## Tester la connectivite SQL depuis la VM avec la Managed Identity
+
+Sur Linux, sqlcmd (mssql-tools18) ne supporte pas le mode ActiveDirectoryManagedIdentity en natif.
+La bonne methode est d interroger directement l IMDS (Instance Metadata Service) de la VM pour obtenir un token Entra ID, puis de le passer a sqlcmd.
+
+Etape 1 - Ouvrir une session sur la VM via Bastion (portail Azure).
+
+Etape 2 - Recuperer le token Entra ID depuis l IMDS:
+```bash
+TOKEN=$(curl -s 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fdatabase.windows.net%2F' \
+  -H Metadata:true | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
+```
+
+Etape 3 - Convertir le token au format attendu par sqlcmd (UTF-16LE sans BOM):
+```bash
+echo -n "$TOKEN" | iconv -f ASCII -t UTF-16LE > /tmp/sql_token.bin
+```
+
+Etape 4 - Se connecter a la base avec sqlcmd:
+```bash
+/opt/mssql-tools18/bin/sqlcmd \
+  -S sql-ynov-sec-demo-001.database.windows.net \
+  -d studentappdb \
+  -G \
+  -P /tmp/sql_token.bin \
+  -C
+```
+
+Pourquoi cette methode:
+- L IMDS (169.254.169.254) est disponible uniquement depuis l interieur de la VM Azure.
+- Le token retourne prouve l identite de la VM (System Assigned Managed Identity) aupres d Azure SQL.
+- `sqlcmd -G -P <fichier>` utilise ce token comme credential Entra ID sans passer par Kerberos.
+- Si la connexion reussit, cela valide que la MSI de la VM est bien reconnue comme administrateur SQL.
+
+Test rapide a lancer une fois connecte:
+```bash
+/opt/mssql-tools18/bin/sqlcmd \
+  -S sql-ynov-sec-demo-001.database.windows.net \
+  -d studentappdb \
+  -G \
+  -P /tmp/sql_token.bin \
+  -C \
+  -Q "SELECT SUSER_SNAME() AS identity_connectee, DB_NAME() AS base;"
 ```
 
 ## Verifications de securite a faire apres deploiement

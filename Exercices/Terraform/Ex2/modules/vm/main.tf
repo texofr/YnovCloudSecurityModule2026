@@ -65,7 +65,7 @@ resource "azurerm_linux_virtual_machine" "sql_client" {
         content: |
           #!/usr/bin/env bash
           set -euo pipefail
-          az login --identity >/dev/null
+          az login --identity --allow-no-subscriptions >/dev/null
           echo "Managed identity connected."
           echo "SQL Server FQDN: ${var.sql_server_fqdn}.database.windows.net"
           echo "Database: ${var.sql_database_name}"
