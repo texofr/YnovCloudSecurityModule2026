@@ -1,0 +1,120 @@
+name: Ex3 Terraform and Docker Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "Exercices/Terraform/Ex3/**"
+      - ".github/workflows/ex3-terraform-acr-webapp.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_WORKING_DIR: Exercices/Terraform/Ex3
+  APP_DIR: Exercices/Terraform/Ex3/app
+  DOCKERFILE_PATH: Exercices/Terraform/Ex3/docker/Dockerfile
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    outputs:
+      acr_name: ${{ steps.tfout.outputs.acr_name }}
+      acr_login_server: ${{ steps.tfout.outputs.acr_login_server }}
+      web_app_name: ${{ steps.tfout.outputs.web_app_name }}
+      rg_name: ${{ steps.tfout.outputs.rg_name }}
+      docker_image_name: ${{ steps.tfout.outputs.docker_image_name }}
+      web_app_url: ${{ steps.tfout.outputs.web_app_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC with managed identity)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Format Check
+        run: terraform -chdir=${{ env.TF_WORKING_DIR }} fmt -check -recursive
+
+      - name: Terraform Init
+        run: terraform -chdir=${{ env.TF_WORKING_DIR }} init
+
+      - name: Terraform Validate
+        run: terraform -chdir=${{ env.TF_WORKING_DIR }} validate
+
+      - name: Terraform Plan
+        run: terraform -chdir=${{ env.TF_WORKING_DIR }} plan -out=tfplan
+
+      - name: Terraform Apply
+        run: terraform -chdir=${{ env.TF_WORKING_DIR }} apply -auto-approve tfplan
+
+      - name: Export Terraform outputs
+        id: tfout
+        shell: bash
+        run: |
+          echo "acr_name=$(terraform -chdir=${{ env.TF_WORKING_DIR }} output -raw acr_name)" >> "$GITHUB_OUTPUT"
+          echo "acr_login_server=$(terraform -chdir=${{ env.TF_WORKING_DIR }} output -raw acr_login_server)" >> "$GITHUB_OUTPUT"
+          echo "web_app_name=$(terraform -chdir=${{ env.TF_WORKING_DIR }} output -raw web_app_name)" >> "$GITHUB_OUTPUT"
+          echo "rg_name=$(terraform -chdir=${{ env.TF_WORKING_DIR }} output -raw resource_group_name)" >> "$GITHUB_OUTPUT"
+          echo "docker_image_name=$(terraform -chdir=${{ env.TF_WORKING_DIR }} output -raw docker_image_name)" >> "$GITHUB_OUTPUT"
+          echo "web_app_url=https://$(terraform -chdir=${{ env.TF_WORKING_DIR }} output -raw web_app_default_hostname)" >> "$GITHUB_OUTPUT"
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: terraform
+    environment: dev
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC with managed identity)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: az acr login --name ${{ needs.terraform.outputs.acr_name }}
+
+      - name: Build and push Docker image
+        shell: bash
+        run: |
+          IMAGE_SHA="${{ needs.terraform.outputs.acr_login_server }}/${{ needs.terraform.outputs.docker_image_name }}:${GITHUB_SHA}"
+          IMAGE_LATEST="${{ needs.terraform.outputs.acr_login_server }}/${{ needs.terraform.outputs.docker_image_name }}:latest"
+
+          docker build \
+            -f "${{ env.DOCKERFILE_PATH }}" \
+            -t "$IMAGE_SHA" \
+            -t "$IMAGE_LATEST" \
+            "${{ env.APP_DIR }}"
+
+          docker push "$IMAGE_SHA"
+          docker push "$IMAGE_LATEST"
+
+      - name: Restart Web App to pull latest image
+        run: |
+          az webapp restart \
+            --name ${{ needs.terraform.outputs.web_app_name }} \
+            --resource-group ${{ needs.terraform.outputs.rg_name }}
+
+      - name: Show Application URL
+        run: echo "Application deployed at ${{ needs.terraform.outputs.web_app_url }}"
