@@ -2,12 +2,6 @@ name: Ex3 Terraform and Docker Deploy
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - "Exercices/Terraform/Ex3/**"
-      - ".github/workflows/ex3-terraform-acr-webapp.yml"
 
 permissions:
   id-token: write
