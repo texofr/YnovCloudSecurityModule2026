@@ -55,7 +55,7 @@ jobs:
         run: terraform -chdir=${{ env.TF_WORKING_DIR }} validate
 
       - name: Trivy IaC report (SARIF)
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: ${{ env.TF_WORKING_DIR }}
@@ -79,7 +79,7 @@ jobs:
           retention-days: 30
 
       - name: Security gate - fail on critical IaC misconfiguration
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: ${{ env.TF_WORKING_DIR }}
@@ -149,7 +149,7 @@ jobs:
             "${{ env.APP_DIR }}"
 
       - name: Trivy report (SARIF)
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.image.outputs.image_sha }}
           format: sarif
@@ -172,7 +172,7 @@ jobs:
           retention-days: 30
 
       - name: Security gate - fail on critical CVEs
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.image.outputs.image_sha }}
           format: table
