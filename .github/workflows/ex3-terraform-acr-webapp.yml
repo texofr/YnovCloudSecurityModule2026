@@ -98,7 +98,7 @@ jobs:
           retention-days: 30
 
       - name: Terraform Plan
-        run: terraform -chdir=${{ env.TF_WORKING_DIR }} plan -out=tfplan
+        run: terraform -chdir=${{ env.TF_WORKING_DIR }} plan -var-file=terraform.tfvars -out=tfplan
 
       - name: Terraform Apply
         run: terraform -chdir=${{ env.TF_WORKING_DIR }} apply -auto-approve tfplan
