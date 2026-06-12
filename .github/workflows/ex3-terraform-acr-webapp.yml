@@ -6,6 +6,7 @@ on:
 permissions:
   id-token: write
   contents: read
+  security-events: write
 
 env:
   TF_WORKING_DIR: Exercices/Terraform/Ex3
@@ -53,6 +54,48 @@ jobs:
       - name: Terraform Validate
         run: terraform -chdir=${{ env.TF_WORKING_DIR }} validate
 
+      - name: Trivy IaC report (SARIF)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: config
+          scan-ref: ${{ env.TF_WORKING_DIR }}
+          format: sarif
+          output: trivy-iac-results.sarif
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: "0"
+
+      - name: Upload Trivy IaC SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-iac-results.sarif
+          category: trivy-iac
+
+      - name: Upload Trivy IaC report artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-iac-sarif-report
+          path: trivy-iac-results.sarif
+          retention-days: 30
+
+      - name: Security gate - fail on critical IaC misconfiguration
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: config
+          scan-ref: ${{ env.TF_WORKING_DIR }}
+          format: table
+          output: trivy-iac-critical.txt
+          severity: CRITICAL
+          exit-code: "1"
+
+      - name: Upload Trivy IaC critical gate report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-iac-critical-gate
+          path: trivy-iac-critical.txt
+          retention-days: 30
+
       - name: Terraform Plan
         run: terraform -chdir=${{ env.TF_WORKING_DIR }} plan -out=tfplan
 
@@ -89,20 +132,69 @@ jobs:
       - name: Login to ACR
         run: az acr login --name ${{ needs.terraform.outputs.acr_name }}
 
+      - name: Prepare image tags
+        id: image
+        shell: bash
+        run: |
+          echo "image_sha=${{ needs.terraform.outputs.acr_login_server }}/${{ needs.terraform.outputs.docker_image_name }}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image_latest=${{ needs.terraform.outputs.acr_login_server }}/${{ needs.terraform.outputs.docker_image_name }}:latest" >> "$GITHUB_OUTPUT"
+
       - name: Build and push Docker image
         shell: bash
         run: |
-          IMAGE_SHA="${{ needs.terraform.outputs.acr_login_server }}/${{ needs.terraform.outputs.docker_image_name }}:${GITHUB_SHA}"
-          IMAGE_LATEST="${{ needs.terraform.outputs.acr_login_server }}/${{ needs.terraform.outputs.docker_image_name }}:latest"
-
           docker build \
             -f "${{ env.DOCKERFILE_PATH }}" \
-            -t "$IMAGE_SHA" \
-            -t "$IMAGE_LATEST" \
+            -t "${{ steps.image.outputs.image_sha }}" \
+            -t "${{ steps.image.outputs.image_latest }}" \
             "${{ env.APP_DIR }}"
 
-          docker push "$IMAGE_SHA"
-          docker push "$IMAGE_LATEST"
+      - name: Trivy report (SARIF)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ steps.image.outputs.image_sha }}
+          format: sarif
+          output: trivy-results.sarif
+          vuln-type: os,library
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Upload Trivy report artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-sarif-report
+          path: trivy-results.sarif
+          retention-days: 30
+
+      - name: Security gate - fail on critical CVEs
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ steps.image.outputs.image_sha }}
+          format: table
+          output: trivy-critical.txt
+          vuln-type: os,library
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Upload Trivy critical gate report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-critical-gate
+          path: trivy-critical.txt
+          retention-days: 30
+
+      - name: Push Docker image
+        shell: bash
+        run: |
+          docker push "${{ steps.image.outputs.image_sha }}"
+          docker push "${{ steps.image.outputs.image_latest }}"
 
       - name: Restart Web App to pull latest image
         run: |
