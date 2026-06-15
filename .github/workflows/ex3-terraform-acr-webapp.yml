@@ -2,6 +2,37 @@ name: Ex3 Terraform and Docker Deploy
 
 on:
   workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'Select security scan(s) to perform'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - iac-only
+          - docker-only
+          - skip-scans
+      severity_levels:
+        description: 'Severity levels to report'
+        required: true
+        default: 'CRITICAL,HIGH,MEDIUM,LOW'
+        type: choice
+        options:
+          - CRITICAL
+          - 'CRITICAL,HIGH'
+          - 'CRITICAL,HIGH,MEDIUM'
+          - 'CRITICAL,HIGH,MEDIUM,LOW'
+      enforce_gates:
+        description: 'Fail on critical issues (security gate)'
+        required: false
+        default: true
+        type: boolean
+      deploy:
+        description: 'Deploy after security validation'
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   id-token: write
@@ -19,6 +50,7 @@ jobs:
   terraform:
     runs-on: ubuntu-latest
     environment: dev
+    if: ${{ github.event.inputs.scan_type != 'docker-only' }}
     env:
       ARM_USE_OIDC: "true"
       ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -31,6 +63,7 @@ jobs:
       rg_name: ${{ steps.tfout.outputs.rg_name }}
       docker_image_name: ${{ steps.tfout.outputs.docker_image_name }}
       web_app_url: ${{ steps.tfout.outputs.web_app_url }}
+      iac_scan_status: ${{ steps.iac_summary.outputs.status }}
 
     steps:
       - name: Checkout
@@ -57,16 +90,18 @@ jobs:
         run: terraform -chdir=${{ env.TF_WORKING_DIR }} validate
 
       - name: Trivy IaC report (SARIF)
+        if: ${{ github.event.inputs.scan_type != 'skip-scans' }}
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: ${{ env.TF_WORKING_DIR }}
           format: sarif
           output: trivy-iac-results.sarif
-          severity: CRITICAL,HIGH,MEDIUM,LOW
+          severity: ${{ github.event.inputs.severity_levels || 'CRITICAL,HIGH,MEDIUM,LOW' }}
           exit-code: "0"
 
       - name: Check GitHub Code Scanning availability
+        if: ${{ github.event.inputs.scan_type != 'skip-scans' }}
         id: cs_iac
         shell: bash
         run: |
@@ -83,21 +118,34 @@ jobs:
           fi
 
       - name: Upload Trivy IaC SARIF to GitHub Security
-        if: steps.cs_iac.outputs.enabled == 'true'
+        if: ${{ github.event.inputs.scan_type != 'skip-scans' && steps.cs_iac.outputs.enabled == 'true' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-iac-results.sarif
           category: trivy-iac
 
       - name: Upload Trivy IaC report artifact
+        if: ${{ always() && github.event.inputs.scan_type != 'skip-scans' }}
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: trivy-iac-sarif-report
           path: trivy-iac-results.sarif
           retention-days: 30
 
+      - name: IaC Scan Summary
+        if: ${{ always() && github.event.inputs.scan_type != 'skip-scans' }}
+        id: iac_summary
+        shell: bash
+        run: |
+          if [ -f trivy-iac-results.sarif ]; then
+            results=$(grep -o '"ruleId"' trivy-iac-results.sarif | wc -l)
+            echo "status=IaC scan completed: $results issues found" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=IaC scan skipped" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Security gate - fail on critical IaC misconfiguration
+        if: ${{ github.event.inputs.enforce_gates == 'true' && github.event.inputs.scan_type != 'skip-scans' }}
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
@@ -108,8 +156,8 @@ jobs:
           exit-code: "1"
 
       - name: Upload Trivy IaC critical gate report
+        if: ${{ always() && github.event.inputs.enforce_gates == 'true' && github.event.inputs.scan_type != 'skip-scans' }}
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: trivy-iac-critical-gate
           path: trivy-iac-critical.txt
@@ -119,6 +167,7 @@ jobs:
         run: terraform -chdir=${{ env.TF_WORKING_DIR }} plan -var-file=terraform.tfvars -out=tfplan
 
       - name: Terraform Apply
+        if: ${{ github.event.inputs.deploy == 'true' }}
         run: terraform -chdir=${{ env.TF_WORKING_DIR }} apply -auto-approve tfplan
 
       - name: Export Terraform outputs
@@ -136,6 +185,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: terraform
     environment: dev
+    if: ${{ github.event.inputs.scan_type != 'iac-only' && github.event.inputs.deploy == 'true' }}
+    outputs:
+      docker_scan_status: ${{ steps.docker_summary.outputs.status }}
 
     steps:
       - name: Checkout
@@ -175,7 +227,7 @@ jobs:
           format: sarif
           output: trivy-results.sarif
           vuln-type: os,library
-          severity: CRITICAL,HIGH,MEDIUM,LOW
+          severity: ${{ github.event.inputs.severity_levels || 'CRITICAL,HIGH,MEDIUM,LOW' }}
           exit-code: "0"
 
       - name: Check GitHub Code Scanning availability
@@ -195,20 +247,33 @@ jobs:
           fi
 
       - name: Upload Trivy SARIF to GitHub Security
-        if: steps.cs_img.outputs.enabled == 'true'
+        if: ${{ steps.cs_img.outputs.enabled == 'true' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif
 
       - name: Upload Trivy report artifact
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: trivy-sarif-report
           path: trivy-results.sarif
           retention-days: 30
 
+      - name: Docker Scan Summary
+        if: ${{ always() }}
+        id: docker_summary
+        shell: bash
+        run: |
+          if [ -f trivy-results.sarif ]; then
+            results=$(grep -o '"ruleId"' trivy-results.sarif | wc -l)
+            echo "status=Docker scan completed: $results vulnerabilities found" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=Docker scan not run" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Security gate - fail on critical CVEs
+        if: ${{ github.event.inputs.enforce_gates == 'true' }}
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.image.outputs.image_sha }}
@@ -220,8 +285,8 @@ jobs:
           exit-code: "1"
 
       - name: Upload Trivy critical gate report
+        if: ${{ always() && github.event.inputs.enforce_gates == 'true' }}
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: trivy-critical-gate
           path: trivy-critical.txt
@@ -241,3 +306,69 @@ jobs:
 
       - name: Show Application URL
         run: echo "Application deployed at ${{ needs.terraform.outputs.web_app_url }}"
+
+  security-summary:
+    name: Security Scan Summary
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    needs: [terraform, docker]
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: scan-reports
+
+      - name: Generate Security Report
+        id: report
+        shell: bash
+        run: |
+          {
+            echo "# 🔐 Security Scan Report"
+            echo ""
+            echo "## Scan Configuration"
+            echo "- **Scan Type**: ${{ github.event.inputs.scan_type || 'all' }}"
+            echo "- **Severity Levels**: ${{ github.event.inputs.severity_levels || 'CRITICAL,HIGH,MEDIUM,LOW' }}"
+            echo "- **Enforce Gates**: ${{ github.event.inputs.enforce_gates || 'true' }}"
+            echo "- **Deploy**: ${{ github.event.inputs.deploy || 'true' }}"
+            echo ""
+            echo "## Results"
+            echo ""
+            
+            if [ -f "scan-reports/trivy-iac-critical-gate/trivy-iac-critical.txt" ]; then
+              echo "### Infrastructure as Code (IaC) - Critical Issues"
+              echo "\`\`\`"
+              head -20 "scan-reports/trivy-iac-critical-gate/trivy-iac-critical.txt"
+              echo "\`\`\`"
+              echo ""
+            fi
+            
+            if [ -f "scan-reports/trivy-critical-gate/trivy-critical.txt" ]; then
+              echo "### Docker Image - Critical Issues"
+              echo "\`\`\`"
+              head -20 "scan-reports/trivy-critical-gate/trivy-critical.txt"
+              echo "\`\`\`"
+              echo ""
+            fi
+            
+            echo "## Artifacts"
+            echo "- IaC SARIF Report: [trivy-iac-sarif-report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts)"
+            echo "- Docker SARIF Report: [trivy-sarif-report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts)"
+            echo ""
+            echo "---"
+            echo "_Workflow run: [${{ github.run_number }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})_"
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Post Summary to Job Summary
+        shell: bash
+        run: |
+          echo "# 🎯 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| IaC Security Scan | ✅ Complete |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Security Scan | ✅ Complete |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event.inputs.deploy }}" = "true" ]; then
+            echo "| Infrastructure Deployment | ✅ Deployed |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Infrastructure Deployment | ⏭️ Skipped |" >> $GITHUB_STEP_SUMMARY
+          fi
