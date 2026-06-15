@@ -5,6 +5,11 @@ resource "azurerm_service_plan" "this" {
   os_type             = "Linux"
   sku_name            = var.app_service_plan_sku
   tags                = var.tags
+
+  timeouts {
+    create = "30m"
+    update = "30m"
+  }
 }
 
 resource "azurerm_linux_web_app" "this" {

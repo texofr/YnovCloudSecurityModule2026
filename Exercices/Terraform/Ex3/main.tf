@@ -45,7 +45,7 @@ module "registry" {
 module "webapp" {
   source   = "./modules/webapp"
   rg_name  = data.azurerm_resource_group.rg.name
-  location = data.azurerm_resource_group.rg.location
+  location = var.webapp_location != null && var.webapp_location != "" ? var.webapp_location : data.azurerm_resource_group.rg.location
 
   app_service_plan_name = var.app_service_plan_name
   app_service_plan_sku  = var.app_service_plan_sku

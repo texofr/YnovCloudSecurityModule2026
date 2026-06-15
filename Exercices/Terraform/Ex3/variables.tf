@@ -22,6 +22,12 @@ variable "app_service_plan_sku" {
   default     = "B1"
 }
 
+variable "webapp_location" {
+  description = "Optional Azure region for App Service resources. Leave null to use the resource group's location."
+  type        = string
+  default     = null
+}
+
 variable "web_app_name_prefix" {
   description = "Web App name prefix"
   type        = string
