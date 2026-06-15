@@ -1,0 +1,140 @@
+name: Ex3 Terraform and Docker Deploy without Scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy after Terraform plan'
+        required: false
+        default: true
+        type: boolean
+
+# This version is the simpler workflow.
+# It only shows the deployment flow: Terraform first, then Docker build and push.
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_WORKING_DIR: Exercices/Terraform/Ex3
+  APP_DIR: Exercices/Terraform/Ex3/app
+  DOCKERFILE_PATH: Exercices/Terraform/Ex3/docker/Dockerfile
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    outputs:
+      acr_name: ${{ steps.tfout.outputs.acr_name }}
+      acr_login_server: ${{ steps.tfout.outputs.acr_login_server }}
+      web_app_name: ${{ steps.tfout.outputs.web_app_name }}
+      rg_name: ${{ steps.tfout.outputs.rg_name }}
+      docker_image_name: ${{ steps.tfout.outputs.docker_image_name }}
+      web_app_url: ${{ steps.tfout.outputs.web_app_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC with managed identity)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          auth-type: SERVICE_PRINCIPAL
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Format Check
+        run: terraform -chdir=${{ env.TF_WORKING_DIR }} fmt -check -recursive
+
+      - name: Terraform Init
+        run: terraform -chdir=${{ env.TF_WORKING_DIR }} init
+
+      - name: Terraform Validate
+        run: terraform -chdir=${{ env.TF_WORKING_DIR }} validate
+
+      # Terraform Plan shows what Azure changes will happen before deployment.
+      - name: Terraform Plan
+        run: terraform -chdir=${{ env.TF_WORKING_DIR }} plan -var-file=terraform.tfvars -out=tfplan
+
+      # Terraform Apply is the step that creates or updates the Azure resources.
+      - name: Terraform Apply
+        if: ${{ github.event.inputs.deploy == 'true' }}
+        run: terraform -chdir=${{ env.TF_WORKING_DIR }} apply -auto-approve tfplan
+
+      - name: Export Terraform outputs
+        id: tfout
+        shell: bash
+        run: |
+          echo "acr_name=$(terraform -chdir=${{ env.TF_WORKING_DIR }} output -raw acr_name)" >> "$GITHUB_OUTPUT"
+          echo "acr_login_server=$(terraform -chdir=${{ env.TF_WORKING_DIR }} output -raw acr_login_server)" >> "$GITHUB_OUTPUT"
+          echo "web_app_name=$(terraform -chdir=${{ env.TF_WORKING_DIR }} output -raw web_app_name)" >> "$GITHUB_OUTPUT"
+          echo "rg_name=$(terraform -chdir=${{ env.TF_WORKING_DIR }} output -raw resource_group_name)" >> "$GITHUB_OUTPUT"
+          echo "docker_image_name=$(terraform -chdir=${{ env.TF_WORKING_DIR }} output -raw docker_image_name)" >> "$GITHUB_OUTPUT"
+          echo "web_app_url=https://$(terraform -chdir=${{ env.TF_WORKING_DIR }} output -raw web_app_default_hostname)" >> "$GITHUB_OUTPUT"
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: terraform
+    environment: dev
+    if: ${{ github.event.inputs.deploy == 'true' }}
+
+    # This job builds the container image and pushes it to ACR.
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC with managed identity)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          auth-type: SERVICE_PRINCIPAL
+
+      - name: Login to ACR
+        run: az acr login --name ${{ needs.terraform.outputs.acr_name }}
+
+      - name: Prepare image tags
+        id: image
+        shell: bash
+        run: |
+          echo "image_sha=${{ needs.terraform.outputs.acr_login_server }}/${{ needs.terraform.outputs.docker_image_name }}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image_latest=${{ needs.terraform.outputs.acr_login_server }}/${{ needs.terraform.outputs.docker_image_name }}:latest" >> "$GITHUB_OUTPUT"
+
+      # Build the Docker image from the app folder using the Dockerfile in this repo.
+      - name: Build and push Docker image
+        shell: bash
+        run: |
+          docker build \
+            -f "${{ env.DOCKERFILE_PATH }}" \
+            -t "${{ steps.image.outputs.image_sha }}" \
+            -t "${{ steps.image.outputs.image_latest }}" \
+            "${{ env.APP_DIR }}"
+
+      - name: Push Docker image
+        shell: bash
+        run: |
+          docker push "${{ steps.image.outputs.image_sha }}"
+          docker push "${{ steps.image.outputs.image_latest }}"
+
+      # Restart the Web App so it pulls the new image version.
+      - name: Restart Web App to pull latest image
+        run: |
+          az webapp restart \
+            --name ${{ needs.terraform.outputs.web_app_name }} \
+            --resource-group ${{ needs.terraform.outputs.rg_name }}
+
+      - name: Show Application URL
+        run: echo "Application deployed at ${{ needs.terraform.outputs.web_app_url }}"

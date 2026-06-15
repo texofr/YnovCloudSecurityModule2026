@@ -1,4 +1,4 @@
-name: Ex3 Terraform and Docker Deploy
+name: Ex3 Terraform and Docker Deploy with Scan
 
 on:
   workflow_dispatch:
@@ -42,6 +42,10 @@ permissions:
 
 env:
   TF_WORKING_DIR: Exercices/Terraform/Ex3
+
+# This workflow is split into two parts:
+# 1) Terraform creates and validates the Azure infrastructure.
+# 2) Trivy scans the infrastructure and the Docker image for security issues.
   APP_DIR: Exercices/Terraform/Ex3/app
   DOCKERFILE_PATH: Exercices/Terraform/Ex3/docker/Dockerfile
   TF_IN_AUTOMATION: "true"
@@ -89,6 +93,7 @@ jobs:
       - name: Terraform Validate
         run: terraform -chdir=${{ env.TF_WORKING_DIR }} validate
 
+      # IaC scan looks for insecure Terraform configurations before deployment.
       - name: Trivy IaC report (SARIF)
         if: ${{ github.event.inputs.scan_type != 'skip-scans' }}
         uses: aquasecurity/trivy-action@v0.36.0
@@ -132,6 +137,7 @@ jobs:
           path: trivy-iac-results.sarif
           retention-days: 30
 
+      # This scan fails the workflow if a critical IaC issue is found.
       - name: IaC Scan Summary
         if: ${{ always() && github.event.inputs.scan_type != 'skip-scans' }}
         id: iac_summary
@@ -166,6 +172,7 @@ jobs:
       - name: Terraform Plan
         run: terraform -chdir=${{ env.TF_WORKING_DIR }} plan -var-file=terraform.tfvars -out=tfplan
 
+      # Apply is the real deployment step for the Azure resources.
       - name: Terraform Apply
         if: ${{ github.event.inputs.deploy == 'true' }}
         run: terraform -chdir=${{ env.TF_WORKING_DIR }} apply -auto-approve tfplan
@@ -221,6 +228,7 @@ jobs:
             "${{ env.APP_DIR }}"
 
       - name: Trivy report (SARIF)
+        # Docker scan checks the built container image before it is pushed and used.
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.image.outputs.image_sha }}
@@ -273,6 +281,7 @@ jobs:
           fi
 
       - name: Security gate - fail on critical CVEs
+        # Critical vulnerabilities stop the workflow so students can see a hard security gate.
         if: ${{ github.event.inputs.enforce_gates == 'true' }}
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -318,6 +327,7 @@ jobs:
         with:
           path: scan-reports
 
+      # GitHub Actions shows this final summary at the end of the run.
       - name: Generate Security Report
         id: report
         shell: bash
