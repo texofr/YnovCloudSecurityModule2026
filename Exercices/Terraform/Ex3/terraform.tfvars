@@ -5,7 +5,7 @@ app_service_plan_sku  = "B1"
 web_app_name_prefix   = "app-ynov-labo-epe"
 docker_image_name     = "ynov-webapp"
 docker_image_tag      = "latest"
-
+webapp_location       = "westeurope"
 tags = {
   project     = "ynov-cloud-module"
   environment = "lab"
