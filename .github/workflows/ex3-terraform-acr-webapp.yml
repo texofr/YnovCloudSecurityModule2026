@@ -66,7 +66,24 @@ jobs:
           severity: CRITICAL,HIGH,MEDIUM,LOW
           exit-code: "0"
 
+      - name: Check GitHub Code Scanning availability
+        id: cs_iac
+        shell: bash
+        run: |
+          status=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/code-scanning/alerts?per_page=1")
+
+          if [ "$status" = "200" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Code Scanning API unavailable (HTTP $status). Skipping SARIF upload."
+          fi
+
       - name: Upload Trivy IaC SARIF to GitHub Security
+        if: steps.cs_iac.outputs.enabled == 'true'
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-iac-results.sarif
@@ -161,7 +178,24 @@ jobs:
           severity: CRITICAL,HIGH,MEDIUM,LOW
           exit-code: "0"
 
+      - name: Check GitHub Code Scanning availability
+        id: cs_img
+        shell: bash
+        run: |
+          status=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/code-scanning/alerts?per_page=1")
+
+          if [ "$status" = "200" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Code Scanning API unavailable (HTTP $status). Skipping SARIF upload."
+          fi
+
       - name: Upload Trivy SARIF to GitHub Security
+        if: steps.cs_img.outputs.enabled == 'true'
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif
