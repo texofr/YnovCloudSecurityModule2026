@@ -10,12 +10,13 @@ terraform {
     }
   }
 
-  backend "azurerm" {
-    resource_group_name  = var.rg_name
-    storage_account_name = "sttfstatelabynovepe"
-    container_name       = "tfstate"
-    key                  = "security-course.terraform.tfstate"
-  }
+  # Example remote backend (optional for students):
+  # backend "azurerm" {
+  #   resource_group_name  = "RG-TFSTATE"
+  #   storage_account_name = "sttfstatelabynovepe"
+  #   container_name       = "tfstate"
+  #   key                  = "security-course.terraform.tfstate"
+  # }
 }
 
 provider "azurerm" {
