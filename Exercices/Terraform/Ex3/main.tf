@@ -11,7 +11,7 @@ terraform {
   }
 
   backend "azurerm" {
-    resource_group_name  = var.rg_name
+    resource_group_name  = "RG-B3-Eric"
     storage_account_name = "sttfstatelabynovepe"
     container_name       = "tfstate"
     key                  = "security-course.terraform.tfstate"
