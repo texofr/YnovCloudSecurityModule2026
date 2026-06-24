@@ -8,7 +8,7 @@ Ce dossier deploie, avec Terraform modulaire:
 Une pipeline GitHub Actions est fournie pour:
 - deployer/configurer les ressources Azure via Terraform
 - builder l'image Docker depuis `app/app.js` avec le `docker/Dockerfile`
-- scanner l'image Docker avec Trivy (rapport + gate securite)
+- scanner le code Terraform et/ou l'image Docker avec Trivy (selon le workflow choisi)
 - pousser l'image dans ACR
 - redemarrer la Web App pour prendre la derniere image
 - detruire l'infrastructure Terraform pour nettoyer le lab
@@ -17,21 +17,40 @@ Une pipeline GitHub Actions est fournie pour:
 - `main.tf`, `variables.tf`, `outputs.tf`, `terraform.tfvars`
 - `modules/acr` : module ACR
 - `modules/webapp` : module App Service Plan + Linux Web App
-- `.github/workflows/ex3-terraform-acr-webapp.yml` : pipeline de deploiement (manuel)
+- `.github/workflows/ex3-terraform-acr-webapp-no-scan.yml` : pipeline de deploiement simplifiee (sans scans)
+- `.github/workflows/ex3-terraform-acr-webapp.yml` : pipeline de deploiement securisee (avec scans Trivy + gates)
 - `.github/workflows/ex3-terraform-acr-webapp-destroy.yml` : pipeline de destruction (manuel)
 
 ## Workflows GitHub Actions
-- `Ex3 Terraform and Docker Deploy`
+- `Ex3 Terraform and Docker Deploy without Scan`
   - declenchement manuel (`workflow_dispatch`)
-  - scan Trivy IaC du code Terraform avec rapport SARIF
-  - blocage si misconfiguration `CRITICAL` dans le code Terraform
-  - provisionnement Terraform + build Docker
-  - scan Trivy de l'image Docker avec rapport SARIF
-  - blocage de la CD si CVE `CRITICAL` detectee dans l'image
-  - push ACR + restart Web App si les deux gates de securite sont valides
+  - parcours simple pour comprendre le flux technique de bout en bout
+  - Terraform: `fmt -check`, `init`, `validate`, `plan`, puis `apply` (option `deploy=true`)
+  - Docker: build, push ACR, restart Web App
+  - aucun scan Trivy ni gate securite
+- `Ex3 Terraform and Docker Deploy with Scan`
+  - declenchement manuel (`workflow_dispatch`)
+  - pipeline securisee avec scans Trivy IaC + image Docker
+  - publication des rapports SARIF et artifacts
+  - gates de securite optionnels (blocage sur `CRITICAL`)
+  - options d'execution: `scan_type`, `severity_levels`, `enforce_gates`, `deploy`
 - `Ex3 Terraform and Docker Destroy`
   - declenchement manuel (`workflow_dispatch`)
   - destruction Terraform avec confirmation obligatoire via l'input `confirm_destroy=destroy`
+
+## Cheminement recommande pour bien comprendre
+Pour progresser de facon pedagogique, utiliser les workflows dans cet ordre:
+
+1. `Ex3 Terraform and Docker Deploy without Scan`
+   - objectif: valider la mecanique Terraform + Docker + ACR + Web App, sans bruit de securite
+2. `Ex3 Terraform and Docker Deploy with Scan`
+   - objectif: ajouter la couche DevSecOps (rapports, gates, seuils de severite)
+3. `Ex3 Terraform and Docker Destroy`
+   - objectif: nettoyer l'environnement de lab
+
+Ce cheminement permet de separer clairement:
+- la comprehension du deploiement
+- puis la comprehension des controles de securite
 
 ## Environnement GitHub `dev`
 Nous utilisons un environnement GitHub nomme `dev` pour securiser les jobs de deploiement et de destruction.
@@ -46,6 +65,7 @@ Cela permet:
 
 ## Comment l'environnement est utilise dans les workflows
 Dans:
+- `.github/workflows/ex3-terraform-acr-webapp-no-scan.yml`
 - `.github/workflows/ex3-terraform-acr-webapp.yml`
 - `.github/workflows/ex3-terraform-acr-webapp-destroy.yml`
 
@@ -101,12 +121,22 @@ Sans cette configuration, `azure/login` et les commandes Terraform/Azure CLI ne 
 
 ## Schema CI/CD de l'exercice
 Le deploiement et le nettoyage sont executes uniquement via GitHub Actions (manuels).
+Deux chemins de deploiement existent: un sans scan (apprentissage du flux) et un avec scan (DevSecOps complet).
 
 ```mermaid
 flowchart TD
     A[Developer lance un workflow manuel] --> B{Workflow choisi}
 
-    B -->|Ex3 Terraform and Docker Deploy| C[Job terraform\nenvironment: dev]
+  B -->|Deploy without Scan| C0[Job terraform\nenvironment: dev]
+  C0 --> D0[OIDC + azure/login]
+  D0 --> E0[Terraform fmt/check init validate plan apply]
+  E0 --> F0[Job docker\nenvironment: dev]
+  F0 --> G0[Build image]
+  G0 --> H0[Push ACR]
+  H0 --> I0[Restart Web App]
+  I0 --> J0[Application disponible]
+
+  B -->|Deploy with Scan| C[Job terraform\nenvironment: dev]
     C --> D[OIDC token GitHub]
     D --> E[azure/login\nAZURE_CLIENT_ID / TENANT_ID / SUBSCRIPTION_ID]
     E --> F[Terraform init / fmt-check / validate]
@@ -134,7 +164,8 @@ flowchart TD
 ```
 
 ## Scans Trivy et gates de securite
-Deux scans Trivy distincts sont executes dans le workflow de deploiement:
+Cette section concerne le workflow `Ex3 Terraform and Docker Deploy with Scan`.
+Deux scans Trivy distincts y sont executes:
 
 ### 1. Scan IaC (code Terraform)
 - se declenche apres `terraform validate`, avant `terraform plan`
@@ -156,3 +187,8 @@ Artifacts produits:
 - `trivy-iac-critical-gate`
 - `trivy-sarif-report`
 - `trivy-critical-gate`
+
+## Quand utiliser quel workflow
+- utiliser `Ex3 Terraform and Docker Deploy without Scan` pour les premiers runs, le debug Terraform ou la validation du pipeline de base
+- utiliser `Ex3 Terraform and Docker Deploy with Scan` pour les runs de validation securite, de demonstration DevSecOps et de controle qualite avant mise en production
+- utiliser `Ex3 Terraform and Docker Destroy` pour supprimer les ressources en fin de TP/lab
