@@ -119,6 +119,25 @@ Sur l'identite user-assigned `mi-ynov-labo-epe`:
 
 Sans cette configuration, `azure/login` et les commandes Terraform/Azure CLI ne pourront pas s'authentifier en OIDC.
 
+## Backend Terraform Ex3
+
+Ex3 utilise un backend distant AzureRM pour conserver un state persistant entre les runs GitHub Actions.
+
+Configuration backend actuelle (dans `main.tf`):
+- `resource_group_name`: `RG-B3-Eric`
+- `storage_account_name`: `sttfstatelabynovepe`
+- `container_name`: `tfstate`
+- `key`: `security-course.terraform.tfstate`
+
+Pourquoi c'est important:
+- les workflows de deploiement et de destruction partagent le meme state;
+- evite les recreations involontaires de ressources;
+- permet une destruction fiable depuis GitHub Actions.
+
+Note migration locale -> backend distant:
+- si un state local existait avant, Terraform peut demander une migration lors du `terraform init`;
+- en CI, ce point n'est pas bloquant si le backend est deja initialise.
+
 ## Schema CI/CD de l'exercice
 Le deploiement et le nettoyage sont executes uniquement via GitHub Actions (manuels).
 Deux chemins de deploiement existent: un sans scan (apprentissage du flux) et un avec scan (DevSecOps complet).

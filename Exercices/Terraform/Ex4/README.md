@@ -75,6 +75,25 @@ Federated Credential cote Azure (managed identity ou app registration):
 - Audience: `api://AzureADTokenExchange`
 - Subject identifier: `repo:<owner>/<repo>:environment:dev`
 
+## Backend Terraform Ex4
+
+Ex4 utilise un backend distant AzureRM pour conserver un state persistant entre les runs GitHub Actions.
+
+Configuration backend actuelle (dans `main.tf`):
+- `resource_group_name`: `RG-B3-Eric`
+- `storage_account_name`: `sttfstatelabynovepe`
+- `container_name`: `tfstate`
+- `key`: `security-course-ex4.terraform.tfstate`
+
+Pourquoi c'est important:
+- les workflows `deploy` et `destroy` partagent le meme state;
+- evite la recreation involontaire de ressources;
+- permet une destruction fiable depuis GitHub Actions.
+
+Note migration locale -> backend distant:
+- si vous aviez un state local precedent, Terraform peut demander une migration de state a l'init;
+- dans un run CI propre, cela n'est pas bloquant si le backend est deja initialise.
+
 ## Architecture cible
 
 ```mermaid

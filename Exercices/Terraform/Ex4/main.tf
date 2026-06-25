@@ -9,6 +9,13 @@ terraform {
       version = "~> 3.0"
     }
   }
+
+  backend "azurerm" {
+    resource_group_name  = "RG-B3-Eric"
+    storage_account_name = "sttfstatelabynovepe"
+    container_name       = "tfstate"
+    key                  = "security-course-ex4.terraform.tfstate"
+  }
 }
 
 provider "azurerm" {
