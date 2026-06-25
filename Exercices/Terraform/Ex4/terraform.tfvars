@@ -16,7 +16,7 @@ log_analytics_retention_days        = 30
 flow_log_retention_days             = 7
 network_watcher_resource_group_name = "NetworkWatcherRG"
 # Optionally force a specific watcher name, otherwise computed from location.
-network_watcher_name = null
+network_watcher_name                = "NetworkWatcher_francecentral-EPE"
 
 tags = {
   project     = "ynov-cloud-module"
