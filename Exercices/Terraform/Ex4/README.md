@@ -265,7 +265,7 @@ Apres ajout du NSG Backend par l'etudiant:
 
 - Le Network Watcher regional doit exister dans le groupe `NetworkWatcherRG`.
 - Ex4 utilise le provider `azurerm` en version `~> 4.0` pour supporter les Virtual Network Flow Logs.
-- Les VMs Ex4 sont parametrees en `Basic_A1` pour maximiser la disponibilite sur les abonnements de lab; si la SKU n'est pas disponible dans votre region, testez `Standard_B1ms` ou une autre SKU autorisee par votre quota.
+- Les VMs Ex4 sont parametrees en `Standard_D2pls_v6` (plus petite SKU visible dans votre region au moment du test); si la SKU n'est pas disponible dans votre region, choisissez la plus petite SKU `D2*` disponible selon votre quota.
 - Les noms de ressources Azure doivent respecter les contraintes de longueur/format.
 - Les outputs sensibles ne doivent pas etre commits dans Git.
 
