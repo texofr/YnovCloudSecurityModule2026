@@ -1,0 +1,19 @@
+Ex4/
+  main.tf
+  variables.tf
+  outputs.tf
+  terraform.tfvars
+  README.md
+  modules/
+    network/
+      main.tf
+      variables.tf
+      outputs.tf
+    compute/
+      main.tf
+      variables.tf
+      outputs.tf
+    observability/
+      main.tf
+      variables.tf
+      outputs.tf
