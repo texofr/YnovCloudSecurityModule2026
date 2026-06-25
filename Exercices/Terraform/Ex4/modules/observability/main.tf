@@ -35,15 +35,15 @@ data "azurerm_network_watcher" "regional" {
   resource_group_name = var.network_watcher_resource_group_name
 }
 
-resource "azurerm_network_watcher_flow_log" "frontend" {
-  name                 = "${var.log_analytics_workspace_name}-front-nsg-flowlog"
+resource "azurerm_network_watcher_flow_log" "vnet" {
+  name                 = "${var.log_analytics_workspace_name}-vnet-flowlog"
   network_watcher_name = data.azurerm_network_watcher.regional.name
   resource_group_name  = data.azurerm_network_watcher.regional.resource_group_name
 
-  network_security_group_id = var.frontend_nsg_id
-  storage_account_id        = azurerm_storage_account.flowlogs.id
-  enabled                   = true
-  version                   = 2
+  target_resource_id = var.vnet_id
+  storage_account_id = azurerm_storage_account.flowlogs.id
+  enabled            = true
+  version            = 2
 
   retention_policy {
     enabled = true

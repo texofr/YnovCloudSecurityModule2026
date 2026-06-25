@@ -7,7 +7,7 @@ output "log_analytics_workspace_name" {
 }
 
 output "flow_log_name" {
-  value = azurerm_network_watcher_flow_log.frontend.name
+  value = azurerm_network_watcher_flow_log.vnet.name
 }
 
 output "dcr_id" {

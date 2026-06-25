@@ -2,7 +2,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 3.0"
+      version = "~> 4.0"
     }
     random = {
       source  = "hashicorp/random"
@@ -71,7 +71,7 @@ module "observability" {
   network_watcher_name                = var.network_watcher_name
   vm_front_id                         = module.compute.vm_front_id
   vm_back_id                          = module.compute.vm_back_id
-  frontend_nsg_id                     = module.network.frontend_nsg_id
+  vnet_id                             = module.network.vnet_id
 
   tags = var.tags
 }

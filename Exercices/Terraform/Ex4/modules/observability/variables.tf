@@ -38,7 +38,7 @@ variable "vm_back_id" {
   type = string
 }
 
-variable "frontend_nsg_id" {
+variable "vnet_id" {
   type = string
 }
 

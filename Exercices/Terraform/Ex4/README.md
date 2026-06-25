@@ -37,8 +37,8 @@ A la fin de cet exercice, vous devez comprendre:
 
 - `modules/observability`
   - Log Analytics Workspace.
-  - Storage Account pour la retention des NSG Flow Logs.
-  - `azurerm_network_watcher_flow_log` active sur le NSG Frontend avec Traffic Analytics.
+  - Storage Account pour la retention des flow logs.
+  - `azurerm_network_watcher_flow_log` cible le VNet (Virtual Network Flow Logs) avec Traffic Analytics.
   - Azure Monitor Agent (AMA) installe sur les 2 VMs.
   - Data Collection Rule (DCR) Syslog + associations sur les 2 VMs.
 
@@ -113,7 +113,7 @@ flowchart TB
   ATTACK[Loop curl vers VM-Back:80]
 
   LAW[Log Analytics Workspace]
-  FLOW[Network Watcher Flow Log]
+  FLOW[Network Watcher VNet Flow Log]
   DCR[DCR Syslog]
 
   INTERNET[(Internet)] --> FNSG
@@ -124,7 +124,7 @@ flowchart TB
   VMF --> ATTACK
   ATTACK --> VMB
 
-  FNSG --> FLOW
+  VNET --> FLOW
   FLOW --> LAW
   DCR --> LAW
   VMF --> DCR
@@ -137,7 +137,7 @@ flowchart TB
 2. Aucun filtrage inter-subnets n'est applique pour bloquer Frontend vers Backend.
 3. Au demarrage, `VM-Front` envoie en boucle des requetes HTTP vers `VM-Back`.
 4. Ce trafic est observable via:
-   - `AzureNetworkAnalytics_CL` (Flow Logs + Traffic Analytics)
+  - `AzureNetworkAnalytics_CL` (Virtual Network Flow Logs + Traffic Analytics)
    - `Syslog` (collecte OS via DCR)
 
 ## Travail etudiant (CTF)
@@ -154,7 +154,7 @@ Objectif etudiant:
 
 ## Sorties Terraform importantes
 
-Apres `terraform apply`, utilisez `terraform output` pour recuperer:
+Apres deploiement, utilisez `terraform output` pour recuperer:
 - `resource_group_name`
 - `vnet_id`
 - `frontend_subnet_id`
@@ -235,6 +235,8 @@ terraform destroy
 
 Note: les flow logs peuvent prendre plusieurs minutes avant d'apparaitre.
 
+Note importante: Ex4 utilise des Virtual Network Flow Logs. La creation de nouveaux NSG Flow Logs est bloquee par Azure.
+
 Flux reseau vers le port 80:
 ```kusto
 AzureNetworkAnalytics_CL
@@ -262,6 +264,7 @@ Apres ajout du NSG Backend par l'etudiant:
 ## Points de vigilance
 
 - Le Network Watcher regional doit exister dans le groupe `NetworkWatcherRG`.
+- Ex4 utilise le provider `azurerm` en version `~> 4.0` pour supporter les Virtual Network Flow Logs.
 - Les noms de ressources Azure doivent respecter les contraintes de longueur/format.
 - Les outputs sensibles ne doivent pas etre commits dans Git.
 
@@ -269,4 +272,4 @@ Apres ajout du NSG Backend par l'etudiant:
 
 - Ajouter un NSG Backend en mode deny-by-default avec allow-list minimale.
 - Ajouter des alertes Azure Monitor sur patterns de trafic suspects.
-- Ajouter un exercice bonus avec NSG Flow Logs compares avant/apres correction.
+- Ajouter un exercice bonus avec VNet Flow Logs compares avant/apres correction.
