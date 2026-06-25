@@ -67,7 +67,7 @@ variable "vm_back_name" {
 variable "vm_size" {
   description = "Size for both Linux VMs"
   type        = string
-  default     = "Standard_B1s"
+  default     = "Basic_A1"
 }
 
 variable "vm_admin_username" {
